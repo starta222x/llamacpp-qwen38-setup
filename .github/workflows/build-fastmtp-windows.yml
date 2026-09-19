@@ -17,7 +17,7 @@ env:
 
 jobs:
   build:
-    name: Windows CUDA ${{ env.CUDA_VERSION }} sm_${{ env.CUDA_ARCH }}
+    name: Windows CUDA 13.3.0 sm_89
     runs-on: windows-2022
 
     steps:
