@@ -1,0 +1,275 @@
+name: Build FastMTP llama.cpp - Windows CUDA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LLAMA_REPO: https://github.com/ggml-org/llama.cpp.git
+  LLAMA_COMMIT: 4df29be4f4c3673f428170fda944a5b19f743bb8
+  FAST_MTP_PATCH_URL: https://huggingface.co/HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/resolve/main/HauhauCS-FastMTP-llama.cpp.patch
+
+  CUDA_VERSION: "13.3"
+  CUDA_ARCH: "89"
+
+jobs:
+  build:
+    name: Windows x64 / CUDA ${{ env.CUDA_VERSION }} / SM ${{ env.CUDA_ARCH }}
+    runs-on: windows-2022
+
+    steps:
+      # ------------------------------------------------------------
+      # 1. Checkout this repository
+      # ------------------------------------------------------------
+      - name: Checkout setup repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # 2. Setup MSVC
+      # ------------------------------------------------------------
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ------------------------------------------------------------
+      # 3. Install CUDA Toolkit
+      # ------------------------------------------------------------
+      - name: Setup CUDA
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+
+      # ------------------------------------------------------------
+      # 4. Install Ninja
+      # ------------------------------------------------------------
+      - name: Install Ninja
+        shell: powershell
+        run: |
+          choco install ninja --no-progress -y
+
+      # ------------------------------------------------------------
+      # 5. Checkout the exact llama.cpp commit
+      # ------------------------------------------------------------
+      - name: Clone llama.cpp
+        shell: powershell
+        run: |
+          git clone "${env:LLAMA_REPO}" llama.cpp
+          Set-Location llama.cpp
+
+          git fetch --depth 1 origin "${env:LLAMA_COMMIT}"
+          git checkout "${env:LLAMA_COMMIT}"
+
+          Write-Host "llama.cpp commit:"
+          git rev-parse HEAD
+
+      # ------------------------------------------------------------
+      # 6. Download FastMTP patch
+      # ------------------------------------------------------------
+      - name: Download FastMTP patch
+        shell: powershell
+        run: |
+          Invoke-WebRequest `
+            -Uri "${env:FAST_MTP_PATCH_URL}" `
+            -OutFile "HauhauCS-FastMTP-llama.cpp.patch"
+
+          if (!(Test-Path "HauhauCS-FastMTP-llama.cpp.patch")) {
+            throw "FastMTP patch was not downloaded."
+          }
+
+          Write-Host "Patch downloaded."
+
+      # ------------------------------------------------------------
+      # 7. Verify patch can be applied
+      # ------------------------------------------------------------
+      - name: Check FastMTP patch
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          git apply --check ../HauhauCS-FastMTP-llama.cpp.patch
+
+      # ------------------------------------------------------------
+      # 8. Apply FastMTP patch
+      # ------------------------------------------------------------
+      - name: Apply FastMTP patch
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          git apply ../HauhauCS-FastMTP-llama.cpp.patch
+
+          Write-Host "FastMTP patch applied."
+
+      # ------------------------------------------------------------
+      # 9. Show CUDA environment
+      # ------------------------------------------------------------
+      - name: Verify CUDA
+        shell: powershell
+        run: |
+          nvcc --version
+
+          Write-Host ""
+          Write-Host "CUDA_PATH=$env:CUDA_PATH"
+
+      # ------------------------------------------------------------
+      # 10. Configure CMake
+      # ------------------------------------------------------------
+      - name: Configure CMake
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          cmake `
+            -S . `
+            -B build `
+            -G "Ninja Multi-Config" `
+            -DGGML_CUDA=ON `
+            -DGGML_NATIVE=OFF `
+            -DCMAKE_CUDA_ARCHITECTURES=${env:CUDA_ARCH} `
+            -DLLAMA_BUILD_SERVER=ON `
+            -DLLAMA_BUILD_CLI=ON `
+            -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_BUILD_EXAMPLES=OFF `
+            -DLLAMA_BUILD_COMMON=ON `
+            -DLLAMA_BUILD_TOOLS=ON `
+            -DLLAMA_BUILD_WEBUI=OFF `
+            -DLLAMA_BUILD_SERVER=ON
+
+      # ------------------------------------------------------------
+      # 11. Build llama-server
+      # ------------------------------------------------------------
+      - name: Build llama-server
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          cmake `
+            --build build `
+            --config Release `
+            --target llama-server `
+            --parallel
+
+      # ------------------------------------------------------------
+      # 12. Show build output
+      # ------------------------------------------------------------
+      - name: Inspect build output
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          Write-Host "=== build/bin ==="
+
+          if (Test-Path "build/bin/Release") {
+            Get-ChildItem "build/bin/Release" |
+              Select-Object Name, Length
+          }
+          elseif (Test-Path "build/bin") {
+            Get-ChildItem "build/bin" |
+              Select-Object Name, Length
+          }
+          else {
+            throw "Cannot find llama.cpp build output."
+          }
+
+      # ------------------------------------------------------------
+      # 13. Create distribution directory
+      # ------------------------------------------------------------
+      - name: Prepare package
+        shell: powershell
+        working-directory: llama.cpp
+        run: |
+          $package = "../llama-fastmtp-windows-x64"
+
+          if (Test-Path $package) {
+            Remove-Item $package -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $package | Out-Null
+
+          # Copy Release binaries
+          if (Test-Path "build/bin/Release") {
+            Copy-Item `
+              "build/bin/Release/*" `
+              $package `
+              -Recurse `
+              -Force
+          }
+          elseif (Test-Path "build/bin") {
+            Copy-Item `
+              "build/bin/*" `
+              $package `
+              -Recurse `
+              -Force
+          }
+
+          # Copy license
+          Copy-Item "LICENSE" "$package/LICENSE.txt"
+
+          # Build metadata
+          @"
+          FastMTP llama.cpp Windows x64
+
+          llama.cpp commit:
+          ${env:LLAMA_COMMIT}
+
+          CUDA:
+          ${env:CUDA_VERSION}
+
+          CUDA architecture:
+          SM ${env:CUDA_ARCH}
+
+          FastMTP patch:
+          HauhauCS-FastMTP-llama.cpp.patch
+
+          Built by:
+          GitHub Actions
+          "@ | Set-Content "$package/BUILD_INFO.txt"
+
+      # ------------------------------------------------------------
+      # 14. Verify llama-server exists
+      # ------------------------------------------------------------
+      - name: Verify llama-server
+        shell: powershell
+        run: |
+          $server = Get-ChildItem `
+            "llama-fastmtp-windows-x64" `
+            -Filter "llama-server.exe" `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $server) {
+            throw "llama-server.exe was not found."
+          }
+
+          Write-Host "Found:"
+          Write-Host $server.FullName
+
+          & $server.FullName --version
+
+      # ------------------------------------------------------------
+      # 15. Create ZIP
+      # ------------------------------------------------------------
+      - name: Package ZIP
+        shell: powershell
+        run: |
+          if (Test-Path "llama-fastmtp-windows-x64.zip") {
+            Remove-Item "llama-fastmtp-windows-x64.zip" -Force
+          }
+
+          Compress-Archive `
+            -Path "llama-fastmtp-windows-x64/*" `
+            -DestinationPath "llama-fastmtp-windows-x64.zip" `
+            -CompressionLevel Optimal
+
+          Get-Item "llama-fastmtp-windows-x64.zip" |
+            Select-Object Name, Length
+
+      # ------------------------------------------------------------
+      # 16. Upload GitHub Actions artifact
+      # ------------------------------------------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-fastmtp-windows-x64-cuda13-sm89
+          path: llama-fastmtp-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
