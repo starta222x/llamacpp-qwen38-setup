@@ -147,15 +147,6 @@ jobs:
           nvcc --version
 
       # ------------------------------------------------------------
-      # 6. Verify NVIDIA driver / GPU
-      # ------------------------------------------------------------
-      - name: Verify GPU
-        shell: cmd
-        run: |
-          nvidia-smi
-          nvidia-smi --query-gpu=name,compute_cap --format=csv
-
-      # ------------------------------------------------------------
       # 7. Clone llama.cpp
       # ------------------------------------------------------------
       - name: Clone llama.cpp
