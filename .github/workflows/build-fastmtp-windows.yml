@@ -261,7 +261,7 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
 
-          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%
 
           if %NINJA_JOBS% LSS 1 set NINJA_JOBS=1
 
